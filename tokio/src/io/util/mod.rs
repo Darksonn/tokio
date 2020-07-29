@@ -66,6 +66,9 @@ cfg_io_util! {
     cfg_stream! {
         mod stream_reader;
         pub use stream_reader::{stream_reader, StreamReader};
+
+        mod stream_chunker;
+        pub use stream_chunker::{stream_chunker, StreamChunker};
     }
 
     mod take;

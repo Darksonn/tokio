@@ -8,11 +8,12 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 pin_project! {
-    /// Convert a stream of byte chunks into an [`AsyncRead`].
+    /// Convert a [`Stream`] of byte chunks into an [`AsyncRead`].
     ///
     /// This type is usually created using the [`stream_reader`] function.
     ///
     /// [`AsyncRead`]: crate::io::AsyncRead
+    /// [`Stream`]: crate::stream::Stream
     /// [`stream_reader`]: crate::io::stream_reader
     #[derive(Debug)]
     #[cfg_attr(docsrs, doc(cfg(feature = "stream")))]
@@ -24,7 +25,10 @@ pin_project! {
     }
 }
 
-/// Convert a stream of byte chunks into an [`AsyncRead`](crate::io::AsyncRead).
+/// Convert a [`Stream`] of byte chunks into an [`AsyncRead`].
+///
+/// [`AsyncRead`]: crate::io::AsyncRead
+/// [`Stream`]: crate::stream::Stream
 ///
 /// # Example
 ///
