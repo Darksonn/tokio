@@ -47,7 +47,8 @@
 //!
 //!  * JOIN_INTEREST - Is set to one if there exists a JoinHandle.
 //!
-//!  * JOIN_WAKER - Is set to one if the JoinHandle has set a waker.
+//!  * JOIN_WAKER - This field behaves as a mutex around the waker for the
+//!    JoinHandle. See the section on the JoinHandle waker for more details.
 //!
 //! The rest of the bits are used for the ref-count.
 //!
@@ -71,10 +72,8 @@
 //!    a lock for the stage field, and it can be accessed only by the thread
 //!    that set RUNNING to one.
 //!
-//!  * If JOIN_WAKER is zero, then the JoinHandle has exclusive access to the
-//!    join handle waker. If JOIN_WAKER and COMPLETE are both one, then the
-//!    thread that set COMPLETE to one has exclusive access to the join handle
-//!    waker.
+//!  * The semantics for the JoinHandle waker field is discussed in its own
+//!    section.
 //!
 //! All other fields are immutable and can be accessed immutably without
 //! synchronization by anyone.
@@ -93,6 +92,58 @@
 //! the JoinHandle. If the JoinHandle is already dropped when the transition to
 //! complete happens, the thread performing that transition retains exclusive
 //! access to the output and should immediately drop it.
+//!
+//! ## The JoinHandle waker
+//!
+//! The JOIN_WAKER, JOIN_INTEREST and COMPLETED bits control access to the
+//! JoinHandle waker field. The access happens according to the following state
+//! machine:
+//!                   JH
+//!     NoWaker     <---->    Waker
+//!       |                     |
+//!       | RT                  | RT
+//!       V           RT        V
+//!    Completed    <-----   Notifying
+//!       ^                     |
+//!       | RT                  | JH
+//!       \---- NotifyingGone <-/
+//!
+//! The initial state is NoWaker.
+//!
+//! Here, each transition is marked by RT or JH depending on whether the runtime
+//! or JoinHandle is the one who can make the transition happen.
+//!
+//! For each state, we list what types of access are allowed:
+//!
+//!  1. NoWaker       - JoinHandle may read and write
+//!  2. Waker         - JoinHandle may read
+//!  3. Completed     - JoinHandle may read and write
+//!  4. Notifying     - JoinHandle and runtime may read
+//!  5. NotifyingGone - Runtime may read and write
+//!
+//! This state machine has no data races because no state permits data races,
+//! and there are no transitions where the JoinHandle takes permissions away
+//! from the runtime or vice-versa.
+//!
+//! The following invariants must hold:
+//!
+//!  1. If COMPLETED and JOIN_WAKER are zero, then the state is NoWaker.
+//!  2. If COMPLETED is zero and JOIN_WAKER is one, then the state is Waker.
+//!  3. If COMPLETED and JOIN_WAKER is one, then the state is Completed.
+//!
+//! Here are the different operations that may happen and which transitions
+//! they correspond to:
+//!
+//!  1. The JoinHandle is polled and reads that COMPLETED and JOIN_WAKER is zero.
+//!     It concludes that the state is NoWaker and writes the provided waker to
+//!     the waker field. If COMPLETED is still zero, it transitions from NoWaker
+//!     to Waker by setting JOIN_WAKER to one. Otherwise it erases the waker
+//!     field and performs no state transitions.
+//!  2. The JoinHandle is polled and reads that COMPLETED is zero and JOIN_WAKER
+//!     is one. If the existing waker does not need to be updated, then it does
+//!     nothing. Otherwise, it attempts to transition Waker->NoWaker by setting
+//!     JOIN_WAKER to zero in a way that fails if COMPLETED is one. It then
+//!     retries the poll operation.
 //!
 //! ## Non-Send futures
 //!

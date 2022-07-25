@@ -181,13 +181,20 @@ impl State {
 
     /// Transitions the task from `Running` -> `Complete`.
     pub(super) fn transition_to_complete(&self) -> Snapshot {
-        const DELTA: usize = RUNNING | COMPLETE;
+        const DELTA: usize = RUNNING | COMPLETE | JOIN_WAKER;
 
         let prev = Snapshot(self.val.fetch_xor(DELTA, AcqRel));
         assert!(prev.is_running());
         assert!(!prev.is_complete());
 
         Snapshot(prev.0 ^ DELTA)
+    }
+
+    /// Called after calling `wake_by_ref` on the join waker.
+    pub(super) fn done_notifying_waker(&self) -> Snapshot {
+        let prev = Snapshot(self.val.fetch_or(JOIN_WAKER, AcqRel));
+
+        Snapshot(prev.0 | JOIN_WAKER)
     }
 
     /// Transitions from `Complete` -> `Terminal`, decrementing the reference

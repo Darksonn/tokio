@@ -273,22 +273,49 @@ impl Header {
 }
 
 impl Trailer {
+    /// # Safety
+    ///
+    /// To call this method, the caller must have exclusive access to the
+    /// Waker field. The conditions for this can be found in the
+    /// `src/runtime/task/mod.rs` file.
     pub(super) unsafe fn set_waker(&self, waker: Option<Waker>) {
         self.waker.with_mut(|ptr| {
             *ptr = waker;
         });
     }
 
-    pub(super) unsafe fn will_wake(&self, waker: &Waker) -> bool {
+    /// # Safety
+    ///
+    /// To call this method, the caller must have immutable access to the
+    /// Waker field. The conditions for this can be found in the
+    /// `src/runtime/task/mod.rs` file.
+    pub(super) unsafe fn will_by_woken_by(&self, waker: &Waker) -> bool {
         self.waker
-            .with(|ptr| (*ptr).as_ref().unwrap().will_wake(waker))
+            .with(|ptr| (*ptr).as_ref().map(|w| waker.will_wake(w)).unwrap_or(false))
     }
 
-    pub(super) fn wake_join(&self) {
-        self.waker.with(|ptr| match unsafe { &*ptr } {
+    /// # Safety
+    ///
+    /// To call this method, the caller must have immutable access to the
+    /// Waker field. The conditions for this can be found in the
+    /// `src/runtime/task/mod.rs` file.
+    pub(super) unsafe fn wake_join(&self) {
+        self.waker.with(|ptr| match &*ptr {
             Some(waker) => waker.wake_by_ref(),
             None => panic!("waker missing"),
         });
+    }
+
+    /// # Safety
+    ///
+    /// To call this method, the caller must have exclusive access to the
+    /// Waker field. The conditions for this can be found in the
+    /// `src/runtime/task/mod.rs` file.
+    pub(super) unsafe fn wake_join_by_val(&self) {
+        let waker = self.waker.with_mut(|ptr| (*ptr).take());
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 }
 

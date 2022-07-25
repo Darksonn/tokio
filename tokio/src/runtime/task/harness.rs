@@ -299,7 +299,7 @@ where
         // The future has completed and its output has been written to the task
         // stage. We transition from running to complete.
 
-        let snapshot = self.header().state.transition_to_complete();
+        let mut snapshot = self.header().state.transition_to_complete();
 
         // We catch panics here in case dropping the future or waking the
         // JoinHandle panics.
@@ -309,10 +309,32 @@ where
                 // this task. It is our responsibility to drop the
                 // output.
                 self.core().stage.drop_future_or_output();
-            } else if snapshot.has_join_waker() {
-                // Notify the join handle. The previous transition obtains the
-                // lock on the waker cell.
-                self.trailer().wake_join();
+            } else if !snapshot.has_join_waker() {
+                // The `transition_to_complete` call toggles this field, so
+                // this branch means that we just changed JOIN_WAKER from one
+                // to zero. If JOIN_INTEREST is one, then this gives us
+                // immutable access to the waker, and if JOIN_INTEREST is zero
+                // then this gives us exclusive access to the waker.
+
+                if snapshot.is_join_interested() {
+                    // We just got immutable access to the waker, so this is ok.
+                    unsafe {
+                        self.trailer().wake_join();
+                    }
+
+                    // This sets JOIN_WAKER back to one. If the JoinHandle is
+                    // still around, then this tells the JoinHandle that we have
+                    // finished accessing the waker.
+                    snapshot = self.header().state.done_notifying_waker();
+                }
+
+                if !snapshot.is_join_interested() {
+                    // The JoinHandle is gone, so we have exclusive access
+                    // and are responsible for cleaning up the waker.
+                    unsafe {
+                        self.trailer().set_waker(None);
+                    }
+                }
             }
         }));
 
@@ -366,13 +388,13 @@ fn can_read_output(header: &Header, trailer: &Trailer, waker: &Waker) -> bool {
             // There already is a waker stored in the struct. If it matches
             // the provided waker, then there is no further work to do.
             // Otherwise, the waker must be swapped.
-            let will_wake = unsafe {
+            let should_not_update = unsafe {
                 // Safety: when `JOIN_INTEREST` is set, only `JOIN_HANDLE`
                 // may mutate the `waker` field.
-                trailer.will_wake(waker)
+                trailer.will_by_woken_by(waker)
             };
 
-            if will_wake {
+            if should_not_update {
                 // The task is not complete **and** the waker is up to date,
                 // there is nothing further that needs to be done.
                 return false;
@@ -412,9 +434,11 @@ fn set_join_waker(
 ) -> Result<Snapshot, Snapshot> {
     assert!(snapshot.is_join_interested());
     assert!(!snapshot.has_join_waker());
+    assert!(!snapshot.is_complete());
 
-    // Safety: Only the `JoinHandle` may set the `waker` field. When
-    // `JOIN_INTEREST` is **not** set, nothing else will touch the field.
+    // Safety: We are the JoinHandle, and we just saw the state having both
+    // JOIN_WAKER and COMPLETE being zero. Thus, the JoinHandle has exclusive
+    // access to the waker.
     unsafe {
         trailer.set_waker(Some(waker));
     }
@@ -424,6 +448,8 @@ fn set_join_waker(
 
     // If the state could not be updated, then clear the join waker
     if res.is_err() {
+        // Safety: We didn't modify the state, so we still have exclusive
+        // access to the waker field.
         unsafe {
             trailer.set_waker(None);
         }
