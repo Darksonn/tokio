@@ -167,6 +167,47 @@ impl<'a, T> Ref<'a, T> {
 }
 
 #[derive(Debug)]
+struct BigNotify {
+    inner: [Notify; 16],
+}
+
+impl BigNotify {
+    fn new() -> Self {
+        Self {
+            inner: [
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+                Notify::new(),
+            ]
+        }
+    }
+
+    fn notify_waiters(&self) {
+        for notify in &self.inner {
+            notify.notify_waiters();
+        }
+    }
+
+    async fn notified(&self) {
+        let i = crate::macros::support::thread_rng_n(16) as usize;
+        self.inner[i].notified().await;
+    }
+}
+
+#[derive(Debug)]
 struct Shared<T> {
     /// The most recent value.
     value: RwLock<T>,
@@ -181,7 +222,7 @@ struct Shared<T> {
     ref_count_rx: AtomicUsize,
 
     /// Notifies waiting receivers that the value changed.
-    notify_rx: Notify,
+    notify_rx: BigNotify,
 
     /// Notifies any task listening for `Receiver` dropped events.
     notify_tx: Notify,
@@ -320,7 +361,7 @@ pub fn channel<T>(init: T) -> (Sender<T>, Receiver<T>) {
         value: RwLock::new(init),
         state: AtomicState::new(),
         ref_count_rx: AtomicUsize::new(1),
-        notify_rx: Notify::new(),
+        notify_rx: BigNotify::new(),
         notify_tx: Notify::new(),
     });
 
