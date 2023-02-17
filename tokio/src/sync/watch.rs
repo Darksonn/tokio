@@ -169,11 +169,13 @@ impl<'a, T> Ref<'a, T> {
 #[derive(Debug)]
 struct BigNotify {
     inner: [Notify; 16],
+    next: AtomicUsize,
 }
 
 impl BigNotify {
     fn new() -> Self {
         Self {
+            next: AtomicUsize::new(0),
             inner: [
                 Notify::new(),
                 Notify::new(),
@@ -202,7 +204,7 @@ impl BigNotify {
     }
 
     async fn notified(&self) {
-        let i = crate::macros::support::thread_rng_n(16) as usize;
+        let i = self.next.fetch_add(1, Relaxed) % 16;
         self.inner[i].notified().await;
     }
 }
