@@ -9,6 +9,35 @@ use std::mem::{self, MaybeUninit};
 use std::ptr;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 
+use std::fmt::{self, Write};
+
+unsafe extern "Rust" {
+    pub fn miri_write_to_stdout(bytes: &[u8]);
+    pub fn miri_write_to_stderr(bytes: &[u8]);
+}
+
+pub struct MiriStderr;
+
+impl Write for MiriStderr {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        unsafe {
+            miri_write_to_stderr(s.as_bytes());
+        }
+        Ok(())
+    }
+}
+
+pub struct MiriStdout;
+
+impl Write for MiriStdout {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        unsafe {
+            miri_write_to_stdout(s.as_bytes());
+        }
+        Ok(())
+    }
+}
+
 // Use wider integers when possible to increase ABA resilience.
 //
 // See issue #5041: <https://github.com/tokio-rs/tokio/issues/5041>.
@@ -166,6 +195,7 @@ impl<T> Local<T> {
         for task in tasks {
             let idx = tail as usize & MASK;
 
+            write!(MiriStdout, "{}", format!("{:p}.buffer[{idx}] write (push_back)\n", self.inner.buffer.as_ptr())).unwrap();
             self.inner.buffer[idx].with_mut(|ptr| {
                 // Write the task to the slot
                 //
@@ -181,6 +211,7 @@ impl<T> Local<T> {
         }
 
         self.inner.tail.store(tail, Release);
+        write!(MiriStdout, "{}", format!("{:p}.buffer write (push_back) tail={}\n", self.inner.buffer.as_ptr(), tail.wrapping_add(1))).unwrap();
     }
 
     /// Pushes a task to the back of the local queue, if there is not enough
@@ -231,6 +262,8 @@ impl<T> Local<T> {
         // Map the position to a slot index.
         let idx = tail as usize & MASK;
 
+        write!(MiriStdout, "{}", format!("{:p}.buffer[{idx}] write (push_back_finish)\n", self.inner.buffer.as_ptr())).unwrap();
+
         self.inner.buffer[idx].with_mut(|ptr| {
             // Write the task to the slot
             //
@@ -245,6 +278,7 @@ impl<T> Local<T> {
         // Make the task available. Synchronizes with a load in
         // `steal_into2`.
         self.inner.tail.store(tail.wrapping_add(1), Release);
+        write!(MiriStdout, "{}", format!("{:p}.buffer[{idx}] write tail={}\n", self.inner.buffer.as_ptr(), tail.wrapping_add(1))).unwrap();
     }
 
     /// Moves a batch of tasks into the inject queue.
@@ -497,11 +531,13 @@ impl<T> Steal<T> {
                 .compare_exchange(prev_packed, next_packed, AcqRel, Acquire);
 
             match res {
-                Ok(_) => break n,
+                Ok(_) => {
+                    write!(MiriStdout, "{}", format!("{:p}: ({src_head_steal}:{src_head_real}) -> ({src_head_steal}:{steal_to}) tail={src_tail}\n", self.0.buffer.as_ptr())).unwrap();
+                    break n;
+                }
                 Err(actual) => prev_packed = actual,
             }
         };
-
         assert!(
             n <= LOCAL_QUEUE_CAPACITY as UnsignedShort / 2,
             "actual = {n}"
@@ -519,11 +555,13 @@ impl<T> Steal<T> {
             let src_idx = src_pos as usize & MASK;
             let dst_idx = dst_pos as usize & MASK;
 
+            write!(MiriStdout, "{}", format!("{:p}.buffer[{src_idx}] read\n", self.0.buffer.as_ptr())).unwrap();
             // Read the task
             //
             // safety: We acquired the task with the atomic exchange above.
             let task = self.0.buffer[src_idx].with(|ptr| unsafe { ptr::read((*ptr).as_ptr()) });
 
+            write!(MiriStdout, "{}", format!("{:p}.buffer[{dst_idx}] write (steal_into2)\n", dst.inner.buffer.as_ptr())).unwrap();
             // Write the task to the new slot
             //
             // safety: `dst` queue is empty and we are the only producer to
@@ -546,7 +584,10 @@ impl<T> Steal<T> {
                 .compare_exchange(prev_packed, next_packed, AcqRel, Acquire);
 
             match res {
-                Ok(_) => return n,
+                Ok(_) => {
+                    write!(MiriStdout, "{}", format!("{:p}: ({}:{}) -> ({head}:{head})\n", self.0.buffer.as_ptr(), unpack(prev_packed).0, unpack(prev_packed).1)).unwrap();
+                    return n;
+                }
                 Err(actual) => {
                     let (actual_steal, actual_real) = unpack(actual);
 
