@@ -1135,7 +1135,8 @@ jobs:
       - name: Install cargo-nextest, wasmtime
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,wasmtime-cli
+          # Pin to v46.0.1 which is compatible with Rust 1.94:
+          tool: cargo-nextest,wasmtime-cli@46.0.1
 
       - uses: Swatinem/rust-cache@v2
 
